@@ -100,8 +100,13 @@ type WindowOptions struct {
 	// ConsumeActivationClick consumes the click that makes a non-key
 	// window key, without sending the press to its content (macOS,
 	// Windows). It applies to the page, native UI and embedded WebViews;
-	// system window controls keep their own behavior. By default the
-	// activation click also reaches the content. Other platforms ignore it.
+	// system window controls keep their own behavior. On Windows, a
+	// regular WebView2 page (without Content) disables its child
+	// control while inactive so the activation click reaches the host
+	// window, which also prevents wheel scrolling, hover and file drops
+	// on that page until the window is active; native UI and embedded
+	// WebViews keep all three while inactive. By default the activation
+	// click also reaches the content. Other platforms ignore it.
 	ConsumeActivationClick bool
 	// Frameless removes the title bar and window chrome. Mark draggable
 	// areas with the CSS `--app-region: drag`.
