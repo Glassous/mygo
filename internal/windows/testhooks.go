@@ -448,9 +448,9 @@ func TestInputMove(hwnd uintptr, x, y float64) bool {
 	}
 	pt := screenPointForInput(w, x, y)
 	setCursor := user32.NewProc("SetCursorPos")
-	setCursor.Call(uintptr(pt.X-1), uintptr(pt.Y))
+	setCursor.Call(uintptr(pt.X-10), uintptr(pt.Y))
 	const mouseMove = 0x0001
-	user32.NewProc("mouse_event").Call(mouseMove, 1, 0, 0, 0)
+	user32.NewProc("mouse_event").Call(mouseMove, 10, 0, 0, 0)
 	setCursor.Call(uintptr(pt.X), uintptr(pt.Y))
 	pumpInputMessages(0)
 	return true
