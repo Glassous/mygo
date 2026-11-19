@@ -484,6 +484,22 @@ func nativeGlassTint(w *mygo.Window) (red, green, blue, alpha float64) {
 
 func activateApp() { mygo.RunOnMain(darwin.TestActivate) }
 
+func checkActivationHit(t *testing.T, w *mygo.Window, kind string, enabled bool) {
+	t.Helper()
+	wantClass := "MyGoWebView"
+	if kind == "native" {
+		wantClass = "MyGoSurfaceView"
+	}
+	eventually(t, "the content placed", func() bool { return hitView(w, 100, 100) == wantClass })
+	var accepts bool
+	mygo.RunOnMain(func() { accepts = darwin.TestAcceptsFirstMouse(w.NativeHandle(), 100, 100) })
+	if accepts == enabled {
+		t.Fatalf("acceptsFirstMouse = %v, want %v", accepts, !enabled)
+	}
+}
+
+func requireForeground(_ *testing.T, w *mygo.Window) { w.Focus() }
+
 // Only X servers keep a keyboard's state for the tests after a test: see
 // left_behind_linux_test.go.
 func keyboardState() (state string, restore func()) { return "", func() {} }

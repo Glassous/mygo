@@ -5,6 +5,7 @@ package windows
 import (
 	"errors"
 	"log"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -142,6 +143,7 @@ type window struct {
 	menuKey                menuKey // the letter that opened popupMenuBar
 
 	programmatic bool
+	active       bool
 	loading      bool
 	zoom         float64
 	muted        bool      // SetAudioMuted, which setUp applies to a web view made later
@@ -485,6 +487,37 @@ func (w *window) monitor() uintptr {
 	return m
 }
 
+// webViewChild returns WebView2's direct child window (Chrome_WidgetWin_0)
+// under w.hwnd, or 0 if none exists.
+func (w *window) webViewChild() uintptr {
+	const gwHwndNext = 2
+	for h, _, _ := procGetTopWindow.Call(w.hwnd); h != 0; h, _, _ = procGetNextWindow.Call(h, gwHwndNext) {
+		var buf [32]uint16
+		n, _, _ := procGetClassNameW.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+		if syscall.UTF16ToString(buf[:n]) == "Chrome_WidgetWin_0" {
+			return h
+		}
+	}
+	return 0
+}
+
+// syncWebViewEnabled disables WebView2's child window while an inactive
+// window has ConsumeActivationClick set, so Windows routes WM_MOUSEACTIVATE
+// to w.hwnd (which returns MA_ACTIVATEANDEAT) instead of letting WebView2's
+// cross-process Chrome_RenderWidgetHostHWND swallow it as MA_ACTIVATE.
+func (w *window) syncWebViewEnabled() {
+	if !webViewBuilt || !w.opts.ConsumeActivationClick || w.host != nil || w.surface != nil || w.controller == 0 {
+		return
+	}
+	if child := w.webViewChild(); child != 0 {
+		enable := uintptr(0)
+		if w.active {
+			enable = 1
+		}
+		procEnableWindow.Call(child, enable)
+	}
+}
+
 // message handles a window message; ok false lets DefWindowProc run.
 func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 	if m == w.b.taskbarButtonCreated && m != 0 {
@@ -496,7 +529,10 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 			return r, true
 		}
 	}
-	if m == wmMouseActivate && w.ownsFocusableFlyout() {
+	if m == wmMouseActivate && (w.ownsFocusableFlyout() || !w.active && w.opts.ConsumeActivationClick && loword(lp) == htClient) {
+		if w.surface != nil {
+			w.surface.eatActivationRelease(hiword(lp))
+		}
 		return maActivateAndEat, true
 	}
 	if m == wmNCActivate && wp == 0 && w.keepsActive() {
@@ -574,13 +610,15 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 		w.h.Moved()
 		return 0, true
 	case wmActivate:
-		if loword(wp) != waInactive {
+		w.active = loword(wp) != waInactive
+		w.syncWebViewEnabled()
+		if w.active {
 			w.flyoutLeft = false
 		}
 		if w.caption != nil {
-			w.caption.activate(loword(wp) != waInactive || w.keepsActive())
+			w.caption.activate(w.active || w.keepsActive())
 		}
-		if loword(wp) == waInactive {
+		if !w.active {
 			w.h.Blurred()
 		} else {
 			w.h.Focused()
