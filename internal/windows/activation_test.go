@@ -3,6 +3,8 @@
 package windows
 
 import (
+	"runtime"
+	"syscall"
 	"testing"
 	"unsafe"
 
@@ -151,12 +153,24 @@ func TestSyncWebViewEnabled(t *testing.T) {
 	}
 	defer procDestroyWindow.Call(child)
 
+	var moveFocusCalls int
+	var ctlVtbl [ctlMoveFocus + 1]uintptr
+	ctlVtbl[ctlMoveFocus] = syscall.NewCallback(func(this, reason uintptr) uintptr {
+		moveFocusCalls++
+		return sOK
+	})
+	ctlPtr := &ctlVtbl[0]
+	var pinner runtime.Pinner
+	pinner.Pin(&ctlVtbl[0])
+	pinner.Pin(&ctlPtr)
+	defer pinner.Unpin()
+
 	isEnabled := user32.NewProc("IsWindowEnabled")
 	w := &window{
 		b:          b,
 		h:          &recordingWindowHandler{},
 		hwnd:       hwnd,
-		controller: 1, // non-zero placeholder
+		controller: uintptr(unsafe.Pointer(&ctlPtr)),
 		opts:       &platform.WindowOptions{ConsumeActivationClick: true},
 	}
 	b.windows[hwnd] = w
@@ -206,6 +220,9 @@ func TestSyncWebViewEnabled(t *testing.T) {
 	if r, _, _ := isEnabled.Call(child); r == 0 {
 		t.Fatal("expected child re-enabled after activation release")
 	}
+	if moveFocusCalls != 1 {
+		t.Fatalf("expected focusWebView called once after activation release, got %d", moveFocusCalls)
+	}
 
 	// Capture loss clears atePageUp and re-enables child so it cannot stay disabled.
 	w.message(wmActivate, waInactive, 0)
@@ -217,5 +234,16 @@ func TestSyncWebViewEnabled(t *testing.T) {
 	}
 	if r, _, _ := isEnabled.Call(child); r == 0 {
 		t.Fatal("expected child re-enabled after wmCaptureChanged")
+	}
+
+	// Non-click activation (WA_ACTIVE, e.g. Alt+Tab) clears stale atePageUp and re-enables child.
+	w.message(wmActivate, waInactive, 0)
+	w.message(wmMouseActivate, hwnd, htClient|uintptr(wmLButtonDown)<<16)
+	w.message(wmActivate, 1, 0) // WA_ACTIVE
+	if w.atePageUp != 0 {
+		t.Fatalf("expected atePageUp cleared on WA_ACTIVE, got %#x", w.atePageUp)
+	}
+	if r, _, _ := isEnabled.Call(child); r == 0 {
+		t.Fatal("expected child re-enabled after WA_ACTIVE")
 	}
 }

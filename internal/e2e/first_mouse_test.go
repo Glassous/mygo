@@ -67,8 +67,9 @@ func TestConsumeActivationClick(t *testing.T) {
 					page.LoadHTML(`<body style="margin:0;height:100vh"
 						onmousedown="window.presses++; if (event.clientX >= 150) window.pressesAtSecondClick = window.presses"
 						onmouseup="window.ups++; if (event.clientX >= 150) window.upsAtSecondClick = window.ups"
-						onclick="window.clicks++; if (event.clientX >= 150) window.clicksAtSecondClick = window.clicks">
-						<script>window.presses=0; window.ups=0; window.clicks=0</script>`, "")
+						onclick="window.clicks++; if (event.clientX >= 150) window.clicksAtSecondClick = window.clicks"
+						onkeydown="window.keys++">
+						<script>window.presses=0; window.ups=0; window.clicks=0; window.keys=0</script>`, "")
 					waitForPage(t, page, "window.presses === 0")
 				}
 				other := newWindow(t, mygo.WindowOptions{Width: 200, Height: 150, X: 400, Y: 40, Content: ui.View(func(c *ui.Context) { ui.Text(c, "Other") })})
@@ -80,6 +81,13 @@ func TestConsumeActivationClick(t *testing.T) {
 					t.Skip("click automation not available on this platform")
 				}
 				eventually(t, "the clicked window focused", w.IsFocused)
+				if kind == "page" {
+					waitForPage(t, page, "document.hasFocus()")
+					if !pressPageLetter(w, 'K') {
+						t.Skip("key automation not available on this platform")
+					}
+					waitForPage(t, page, "window.keys === 1")
+				}
 				// Use a different target for the second click. Its handler
 				// records the count after both presses have been handled,
 				// so a transient count of one cannot satisfy the assertion.

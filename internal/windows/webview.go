@@ -4,6 +4,7 @@ package windows
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -226,7 +227,10 @@ func (w *window) setUp(controller uintptr) {
 		release(s3)
 	}
 	comCall(s, setPutAreDefaultContextMenusEnabled, 1)
-	comCall(s, setPutIsZoomControlEnabled, 1)
+	// Ctrl+wheel zooms the page, and so do Ctrl+Plus and Ctrl+Minus
+	// where the browser's keys are on, only if it asks: WKWebView and
+	// WebKitGTK have no such zoom. SetZoom zooms either way.
+	comCall(s, setPutIsZoomControlEnabled, boolArg(o.ZoomControl))
 	// WebView2 has a touchscreen's pinch zoom and swipe navigation on:
 	// they are off unless the page asks, as in WKWebView.
 	if s5 := queryInterface(s, &iidICoreWebView2Settings5); s5 != 0 {
@@ -293,6 +297,11 @@ func (w *window) setUp(controller uintptr) {
 		}
 	}
 	add(wvAddWindowCloseRequested, func(_, _ uintptr) { w.h.ClosedByPage() })
+	// An element the page makes full screen covers only the web view, so
+	// the window showing it goes full screen too, as WKWebView makes macOS
+	// do; the page leaving its full screen (Escape, exitFullscreen) takes
+	// the window out again (pageFullScreenChanged).
+	add(wvAddContainsFullScreenElementChanged, func(_, _ uintptr) { w.pageFullScreenChanged() })
 	add(wvAddProcessFailed, func(_, args uintptr) {
 		var kind int32
 		comCall(args, procFailedGetKind, uintptr(unsafe.Pointer(&kind)))
@@ -313,6 +322,12 @@ func (w *window) setUp(controller uintptr) {
 	w.filterAllRequests()
 	withHandler(w.acceleratorKeyPressed, func(h uintptr) uintptr {
 		return comCall(controller, ctlAddAcceleratorKeyPressed, h, uintptr(unsafe.Pointer(&tok)))
+	})
+	// Zoom reports the user's zoom too, and WebView2's own, which keeps
+	// one per site, as the page navigates. It runs for no put_ZoomFactor,
+	// so not for SetZoom's.
+	withHandler(func(_, _ uintptr) { w.zoomFactorChanged() }, func(h uintptr) uintptr {
+		return comCall(controller, ctlAddZoomFactorChanged, h, uintptr(unsafe.Pointer(&tok)))
 	})
 
 	if w.host != nil {
@@ -398,6 +413,39 @@ func (w *window) focusWebView() {
 	}
 }
 
+// pageFullScreenChanged takes the page's own full screen (an element
+// fullscreened by requestFullscreen, a video's button among them) to the
+// window showing the web view: to its own, or to its host's, for a web
+// view in native UI, which is the window whose whole client area the page
+// should then cover, as WKWebView promotes its window on macOS. The page
+// leaving its full screen takes the window out, unless the app had asked
+// for that full screen itself (setFullScreen).
+func (w *window) pageFullScreenChanged() {
+	if w.closed || w.webview == 0 {
+		return
+	}
+	var on int32
+	comCall(w.webview, wvGetContainsFullScreenElement, uintptr(unsafe.Pointer(&on)))
+	w.pageFull = on != 0
+	toplevel := w
+	for toplevel.host != nil {
+		toplevel = toplevel.host
+	}
+	toplevel.setFullScreen(w.pageFull, false)
+}
+
+// leavePageFullScreen takes the window's page and the pages shown in its
+// surface out of their own full screens: a window coming out of full
+// screen leaves the page's element out of it too, as WebKit's windows do
+// on macOS.
+func (w *window) leavePageFullScreen() {
+	for _, v := range append([]*window{w}, w.webViews...) {
+		if v.pageFull && !v.closed && v.webview != 0 {
+			v.Eval("if (document.fullscreenElement) document.exitFullscreen().catch(function () {});")
+		}
+	}
+}
+
 func (w *window) navigationStarting(_, args uintptr) {
 	var p uintptr
 	comCall(args, navStartingGetURI, uintptr(unsafe.Pointer(&p)))
@@ -456,8 +504,8 @@ func (w *window) navigationCompleted(_, args uintptr) {
 			comCall(w.webview, wvReload)
 			return
 		}
-		if zoomByScript && w.zoom != 1 {
-			putZoom(w, w.zoom) // a new document starts unzoomed
+		if zoomByScript && w.zoom != cmp.Or(w.userZoom, 1) {
+			putZoom(w, w.zoom) // a new document starts without CSS zoom
 		}
 		w.h.LoadFinished()
 		return
@@ -848,7 +896,7 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 	w.withWebViewOr(func() {
 		w.devtools("Runtime.evaluate", string(params), func(result string, err error) {
 			if err != nil {
-				cb("", err)
+				cb("", devtoolsFailure("Runtime.evaluate", result, err))
 				return
 			}
 			var out struct {
@@ -881,7 +929,9 @@ func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
 	}, func(err error) { cb("", err) })
 }
 
-// devtools calls a DevTools protocol method; done may be nil.
+// devtools calls a DevTools protocol method; done may be nil. A method
+// that fails gives done its error with the protocol's answer, if any,
+// which devtoolsFailure reads.
 func (w *window) devtools(method, params string, done func(string, error)) {
 	id := 0
 	if done != nil {
@@ -896,7 +946,7 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 			return
 		}
 		if failed(hr) {
-			cb("", hresultError(method, hr))
+			cb(wstr(result), hresultError(method, hr))
 			return
 		}
 		cb(wstr(result), nil)
@@ -911,12 +961,42 @@ func (w *window) devtools(method, params string, done func(string, error)) {
 	}
 }
 
+// devtoolsFailure is the error of method, which failed with err and
+// answer, the protocol's: {"error":{"code":…,"message":…},"id":…}, with
+// its message. An evaluation whose document went away is ErrNavigated:
+// Chromium fails what it waits for then, before the next document
+// commits. The callers that tell apps their errors call it, not devtools,
+// which the default menus' Paste reaches in every app.
+func devtoolsFailure(method, answer string, err error) error {
+	var a any
+	_ = json.Unmarshal([]byte(answer), &a)
+	top, _ := a.(map[string]any)
+	e, _ := top["error"].(map[string]any)
+	code, _ := e["code"].(float64)
+	message, _ := e["message"].(string)
+	switch {
+	case method == "Runtime.evaluate" && code == -32000 && message == "Inspected target navigated or closed":
+		return platform.ErrNavigated
+	case message != "":
+		return fmt.Errorf("%w: %s", err, message)
+	}
+	return err
+}
+
 func (w *window) SetZoom(f float64) {
 	w.zoom = f
 	w.withWebView(func() { putZoom(w, f) })
 }
 
 func (w *window) Zoom() float64 { return w.zoom }
+
+// zoomFactorChanged follows a zoom the user chose, which the controller's
+// ZoomFactorChanged tells of.
+func (w *window) zoomFactorChanged() {
+	if w.userZoomed() {
+		w.h.ZoomChanged()
+	}
+}
 
 // setUpUserAgent applies UserAgent and UserAgentSuffix, which appends to
 // WebView2's own user agent when it is all that is set.
@@ -1238,7 +1318,7 @@ func (w *window) PrintToPDF(o platform.PDFOptions, cb func([]byte, error)) {
 	w.withWebViewOr(func() {
 		w.devtools("Page.printToPDF", string(params), func(res string, err error) {
 			if err != nil {
-				cb(nil, fmt.Errorf("mygo: printing to PDF: %w", err))
+				cb(nil, fmt.Errorf("mygo: printing to PDF: %w", devtoolsFailure("Page.printToPDF", res, err)))
 				return
 			}
 			var r struct {
