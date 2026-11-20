@@ -768,16 +768,7 @@ func (s *surface) pointer(kind platform.SurfaceEventKind, lp uintptr, button int
 // WM_MOUSEACTIVATE ate (MA_ACTIVATEANDEAT), so the release that follows
 // does not reach the content or an embedded web view as half a click.
 func (s *surface) eatActivationRelease(down uint16) {
-	switch down {
-	case wmLButtonDown:
-		s.ateUp = wmLButtonUp
-	case wmRButtonDown:
-		s.ateUp = wmRButtonUp
-	case wmMButtonDown:
-		s.ateUp = wmMButtonUp
-	case wmXButtonDown:
-		s.ateUp = wmXButtonUp
-	}
+	s.ateUp = releaseMessage(down)
 }
 
 func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool) {

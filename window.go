@@ -100,13 +100,15 @@ type WindowOptions struct {
 	// ConsumeActivationClick consumes the click that makes a non-key
 	// window key, without sending the press to its content (macOS,
 	// Windows). It applies to the page, native UI and embedded WebViews;
-	// system window controls keep their own behavior. On Windows, a
-	// regular WebView2 page (without Content) disables its child
-	// control while inactive so the activation click reaches the host
-	// window, which also prevents wheel scrolling, hover and file drops
-	// on that page until the window is active; native UI and embedded
-	// WebViews keep all three while inactive. By default the activation
-	// click also reaches the content. Other platforms ignore it.
+	// system window controls keep their own behavior, while custom
+	// title-bar drag regions (`--app-region: drag`, `ui.Element.DragWindow`)
+	// require the window to be active first. On Windows, a regular
+	// WebView2 page (without Content) disables its child control while
+	// inactive so the activation click reaches the host window, which
+	// also prevents wheel scrolling, hover and file drops on that page
+	// until the window is active; native UI and embedded WebViews keep
+	// all three while inactive. By default the activation click also
+	// reaches the content. Other platforms ignore it.
 	ConsumeActivationClick bool
 	// Frameless removes the title bar and window chrome. Mark draggable
 	// areas with the CSS `--app-region: drag`.
@@ -750,42 +752,41 @@ func newWindow(opts WindowOptions, bg, tint *background, native uintptr, flyout 
 func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 	po := o.Page
 	p := &platform.WindowOptions{
-		Title:                  o.Title,
-		X:                      o.X,
-		Y:                      o.Y,
-		Width:                  or(o.Width, 800),
-		Height:                 or(o.Height, 600),
-		Center:                 o.X == 0 && o.Y == 0,
-		UseContentSize:         o.UseContentSize,
-		MinSize:                platform.Size{Width: o.MinWidth, Height: o.MinHeight},
-		MaxSize:                platform.Size{Width: o.MaxWidth, Height: o.MaxHeight},
-		Resizable:              !o.DisableResize,
-		Movable:                !o.DisableMove,
-		Minimizable:            !o.DisableMinimize,
-		Maximizable:            !o.DisableMaximize,
-		Closable:               !o.DisableClose,
-		Focusable:              true,
-		Fullscreenable:         !o.DisableFullScreen,
-		AlwaysOnTop:            o.AlwaysOnTop,
-		FullScreen:             o.FullScreen,
-		Maximized:              o.Maximized,
-		SkipTaskbar:            o.SkipTaskbar,
-		AutoHideMenu:           o.AutoHideMenuBar,
-		HasShadow:              !o.DisableShadow,
-		Frameless:              o.Frameless,
-		Transparent:            o.Transparent,
-		ConsumeActivationClick: o.ConsumeActivationClick,
-		TitleBarStyle:          string(o.TitleBarStyle),
-		TitleBarHeight:         max(o.TitleBarHeight, 0),
-		HideWindowButtons:      o.HideWindowButtons,
-		Vibrancy:               string(o.Vibrancy),
-		VibrancyTint:           w.vibrancyTintColor(),
-		CornerRadius:           max(o.CornerRadius, 0),
-		Opacity:                o.Opacity,
-		Modal:                  o.Modal,
-		UserAgent:              po.UserAgent,
-		UserAgentSuffix:        strings.TrimSpace(po.UserAgentSuffix),
-		Zoom:                   po.ZoomFactor,
+		Title:             o.Title,
+		X:                 o.X,
+		Y:                 o.Y,
+		Width:             or(o.Width, 800),
+		Height:            or(o.Height, 600),
+		Center:            o.X == 0 && o.Y == 0,
+		UseContentSize:    o.UseContentSize,
+		MinSize:           platform.Size{Width: o.MinWidth, Height: o.MinHeight},
+		MaxSize:           platform.Size{Width: o.MaxWidth, Height: o.MaxHeight},
+		Resizable:         !o.DisableResize,
+		Movable:           !o.DisableMove,
+		Minimizable:       !o.DisableMinimize,
+		Maximizable:       !o.DisableMaximize,
+		Closable:          !o.DisableClose,
+		Focusable:         true,
+		Fullscreenable:    !o.DisableFullScreen,
+		AlwaysOnTop:       o.AlwaysOnTop,
+		FullScreen:        o.FullScreen,
+		Maximized:         o.Maximized,
+		SkipTaskbar:       o.SkipTaskbar,
+		AutoHideMenu:      o.AutoHideMenuBar,
+		HasShadow:         !o.DisableShadow,
+		Frameless:         o.Frameless,
+		Transparent:       o.Transparent,
+		TitleBarStyle:     string(o.TitleBarStyle),
+		TitleBarHeight:    max(o.TitleBarHeight, 0),
+		HideWindowButtons: o.HideWindowButtons,
+		Vibrancy:          string(o.Vibrancy),
+		VibrancyTint:      w.vibrancyTintColor(),
+		CornerRadius:      max(o.CornerRadius, 0),
+		Opacity:           o.Opacity,
+		Modal:             o.Modal,
+		UserAgent:         po.UserAgent,
+		UserAgentSuffix:   strings.TrimSpace(po.UserAgentSuffix),
+		Zoom:              po.ZoomFactor,
 		// Tab reaches every control, as desktop apps do, unless the app
 		// asked for Safari's behavior.
 		TabFocusesLinks:        !po.SafariTabFocus,
@@ -796,6 +797,7 @@ func (w *Window) platformOptions(o *WindowOptions) *platform.WindowOptions {
 		Schemes:                Protocol.schemes(),
 		Panel:                  o.Panel,
 		PictureInPicture:       po.PictureInPicture,
+		ConsumeActivationClick: o.ConsumeActivationClick,
 	}
 	if o.Panel {
 		p.Minimizable, p.Maximizable, p.Fullscreenable = false, false, false

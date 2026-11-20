@@ -17,7 +17,7 @@ func TestConsumeActivationClick(t *testing.T) {
 	for _, kind := range []string{"page", "native", "embedded"} {
 		for _, enabled := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%v", kind, enabled), func(t *testing.T) {
-				var clicks, pressesAtSecondClick, frames atomic.Int32
+				var clicks, pressesAtSecondClick, frames, nativeDowns, nativeUps atomic.Int32
 				var view *mygo.WebView
 				opts := mygo.WindowOptions{
 					Width: 300, Height: 200, X: 40, Y: 40,
@@ -27,7 +27,14 @@ func TestConsumeActivationClick(t *testing.T) {
 					opts.Content = ui.View(func(c *ui.Context) {
 						frames.Add(1)
 						if kind == "native" {
-							ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+							ui.Row(c).Fill().AlignItems(ui.Stretch).ObserveInput(func(ev ui.InputEvent) {
+								switch ev.Kind {
+								case ui.InputPointerDown:
+									nativeDowns.Add(1)
+								case ui.InputPointerUp:
+									nativeUps.Add(1)
+								}
+							}).Children(func() {
 								if ui.Box(c).Grow(1).Clicked() {
 									clicks.Add(1)
 								}
@@ -57,7 +64,11 @@ func TestConsumeActivationClick(t *testing.T) {
 					eventually(t, "the native frame built", func() bool { return frames.Load() > 0 })
 				}
 				if page != nil {
-					page.LoadHTML(`<body style="margin:0;height:100vh" onmousedown="window.presses++; if (event.clientX >= 150) window.pressesAtSecondClick = window.presses"><script>window.presses=0</script>`, "")
+					page.LoadHTML(`<body style="margin:0;height:100vh"
+						onmousedown="window.presses++; if (event.clientX >= 150) window.pressesAtSecondClick = window.presses"
+						onmouseup="window.ups++; if (event.clientX >= 150) window.upsAtSecondClick = window.ups"
+						onclick="window.clicks++; if (event.clientX >= 150) window.clicksAtSecondClick = window.clicks">
+						<script>window.presses=0; window.ups=0; window.clicks=0</script>`, "")
 					waitForPage(t, page, "window.presses === 0")
 				}
 				other := newWindow(t, mygo.WindowOptions{Width: 200, Height: 150, X: 400, Y: 40, Content: ui.View(func(c *ui.Context) { ui.Text(c, "Other") })})
@@ -77,20 +88,28 @@ func TestConsumeActivationClick(t *testing.T) {
 				if enabled {
 					want = 1
 				}
-				var got int32
 				if page == nil {
 					eventually(t, "the second native click handled", func() bool { return pressesAtSecondClick.Load() > 0 })
-					got = pressesAtSecondClick.Load()
-				} else {
-					waitForPage(t, page, "Number.isInteger(window.pressesAtSecondClick)")
-					n, err := mygo.EvalAs[int](page, "window.pressesAtSecondClick")
-					if err != nil {
-						t.Fatal(err)
+					if got := pressesAtSecondClick.Load(); got != want {
+						t.Fatalf("clicks after the second click = %d, want %d", got, want)
 					}
-					got = int32(n)
-				}
-				if got != want {
-					t.Fatalf("presses after the second click = %d, want %d", got, want)
+					if got := nativeDowns.Load(); got != want {
+						t.Fatalf("pointer downs after the second click = %d, want %d", got, want)
+					}
+					if got := nativeUps.Load(); got != want {
+						t.Fatalf("pointer ups after the second click = %d, want %d", got, want)
+					}
+				} else {
+					waitForPage(t, page, "Number.isInteger(window.pressesAtSecondClick) && Number.isInteger(window.upsAtSecondClick) && Number.isInteger(window.clicksAtSecondClick)")
+					for _, expr := range []string{"window.pressesAtSecondClick", "window.upsAtSecondClick", "window.clicksAtSecondClick"} {
+						n, err := mygo.EvalAs[int](page, expr)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if int32(n) != want {
+							t.Fatalf("%s = %d, want %d", expr, n, want)
+						}
+					}
 				}
 			})
 		}

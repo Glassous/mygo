@@ -147,6 +147,8 @@ func TestMouseActivate(hwnd uintptr, x, y float64) (res uintptr, class string) {
 	}
 	var buf [64]uint16
 	n, _, _ := procGetClassNameW.Call(cur, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	prevPageUp := w.atePageUp
+	defer func() { w.atePageUp = prevPageUp }()
 	if w.surface != nil {
 		prev := w.surface.ateUp
 		defer func() { w.surface.ateUp = prev }()

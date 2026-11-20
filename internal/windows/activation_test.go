@@ -189,4 +189,33 @@ func TestSyncWebViewEnabled(t *testing.T) {
 	if r, _, _ := isEnabled.Call(child); r == 0 {
 		t.Fatal("expected child re-enabled after WA_ACTIVE")
 	}
+
+	// Simulate an activation click on an inactive page window: child stays
+	// disabled across WA_CLICKACTIVE until the matching button-up arrives.
+	w.message(wmActivate, waInactive, 0)
+	if res, handled := w.message(wmMouseActivate, hwnd, htClient|uintptr(wmLButtonDown)<<16); !handled || res != maActivateAndEat {
+		t.Fatalf("wmMouseActivate on page = (%d, %v), want (%d, true)", res, handled, maActivateAndEat)
+	}
+	w.message(wmActivate, 2, 0) // WA_CLICKACTIVE
+	if r, _, _ := isEnabled.Call(child); r != 0 {
+		t.Fatal("expected child kept disabled until activation release arrives")
+	}
+	if res, handled := w.message(wmLButtonUp, 0, 0); !handled || res != 0 {
+		t.Fatalf("wmLButtonUp after activation press = (%d, %v), want (0, true)", res, handled)
+	}
+	if r, _, _ := isEnabled.Call(child); r == 0 {
+		t.Fatal("expected child re-enabled after activation release")
+	}
+
+	// Capture loss clears atePageUp and re-enables child so it cannot stay disabled.
+	w.message(wmActivate, waInactive, 0)
+	w.message(wmMouseActivate, hwnd, htClient|uintptr(wmLButtonDown)<<16)
+	w.message(wmActivate, 2, 0)
+	w.message(wmCaptureChanged, 0, 0)
+	if w.atePageUp != 0 {
+		t.Fatalf("expected atePageUp cleared on wmCaptureChanged, got %#x", w.atePageUp)
+	}
+	if r, _, _ := isEnabled.Call(child); r == 0 {
+		t.Fatal("expected child re-enabled after wmCaptureChanged")
+	}
 }
